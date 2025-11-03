@@ -1,0 +1,11 @@
+# !!! To apply the changes, save the file and close Notepad. !!!
+
+
+# Name of the deck in Anki. deafault is None - all decks. 
+deck_name: None # Example: Linear Algebra
+# Determines how accurate the match with the template should be to detect the death/respawn screen
+confidence_level: 0.6 # Value in range: 0-1
+# Time in seconds between checking the screen for a template. Deafault: 0.
+delay_between_screen_checks: 0 # Any number. (1, 0.5, 3, 0.01, 0, 10, ...)
+# Theme of card web page
+web_page_theme: system # Values: system/dark/light

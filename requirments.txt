@@ -1,0 +1,8 @@
+requests
+pyautogui
+pygetwindow 
+opencv-python 
+screeninfo 
+pywin32
+PyYAML 
+auto-py-to-exe
