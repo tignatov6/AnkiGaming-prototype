@@ -7,10 +7,11 @@ class Config():
         self.confidence_level = 0.6
         self.delay_between_screen_checks = 0
         self.web_page_theme = 'system'
+        self.language_localization = 'system'
         self.update_config()
 
     def update_config(self):
-        with open(self.config_file_path, 'r') as file:
+        with open(self.config_file_path, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file)
             print(f"Config: {data}")
 
@@ -47,6 +48,13 @@ class Config():
                 self.web_page_theme = 'system'
         except:
             self.web_page_theme = 'system'
+
+
+        # language_localization
+        try:
+            self.language_localization = str(data['language_localization'])
+        except:
+            self.language_localization = 'system'
 
 if __name__ == "__main__":
     CONFIG = Config() 

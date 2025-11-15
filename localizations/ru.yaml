@@ -1,0 +1,8 @@
+showAnswer: "Показать ответ"
+again: "Снова"
+hard: "Трудно"
+good: "Хорошо"
+easy: "Легко"
+cardNotFound: "Карточка не найдена."
+noCardsInDeck: "Возможно, в выбранной колоде нет карточек для повторения."
+shutdownAnkiGaming: "Выключить \"AnkiGaming\""

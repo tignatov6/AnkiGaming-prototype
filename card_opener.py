@@ -7,7 +7,6 @@ import time
 import requests
 import threading
 import pygetwindow as pw
-from screeninfo import get_monitors
 import pyautogui
 import win32gui
 import win32con
@@ -16,11 +15,15 @@ import mimetypes
 import urllib.parse
 import sys
 
+from screeninfo import get_monitors
+from localization import Localization
+
 # --- Настройки ---
 PORT = 8000
 ANKI_CONNECT_URL = "http://localhost:8765"
 ANKI_CONNECT_VERSION = 6
-HEARTBEAT_TIMEOUT = 1 # Секунд без "пульса" до повторного открытия
+HEARTBEAT_TIMEOUT = 0.3 # Секунд без "пульса" до повторного открытия
+LOCALIZER = Localization(directory='localizations', fallback_lang='en')
 
 # --- Глобальные переменные для обмена данными между потоками ---
 last_heartbeat_time = time.time()
@@ -28,6 +31,7 @@ card_answered = False
 httpd_server = None
 app_running = True
 page_theme = 'system'
+language = 'system'
 
 def invoke_anki_connect(action, **params):
     """Отправляет запрос к AnkiConnect."""
@@ -45,17 +49,56 @@ def invoke_anki_connect(action, **params):
         print('-' * 50)
         print('Check if Anki is open and if the AnkiConnect extension is installed and enabled.')
         return None
+    
+def _get_localization_script(localizer, forced_lang):
+    """
+    Генерирует JS-скрипт, который будет управлять локализацией на стороне клиента.
+    """
+    localizations_json = localizer.get_all_as_json()
+    fallback_lang_json = json.dumps(localizer.fallback_lang)
+    
+    # Если язык задан принудительно, передаем его код. Иначе передаем null.
+    forced_lang_json = json.dumps(forced_lang if forced_lang != 'system' else None)
 
-def create_html(card_info, web_page_theme = 'system'):
-    """Создает HTML-страницу с механизмом "пульса" и поддержкой тем.
-        web_page_theme: 'system'/'dark'/'light'
+    return f"""
+    <script>
+        const localizations = {localizations_json};
+        const fallbackLang = {fallback_lang_json};
+        const forcedLang = {forced_lang_json};
+
+        function applyLocalization() {{
+            // Определяем язык: либо принудительно заданный, либо из настроек браузера
+            const langCode = forcedLang || navigator.language.split('-')[0];
+            
+            // Выбираем словарь переводов. Если языка нет, используем запасной.
+            const translations = localizations[langCode] || localizations[fallbackLang];
+            if (!translations) return;
+
+            document.querySelectorAll('[data-translate-key]').forEach(element => {{
+                const key = element.dataset.translateKey;
+                if (translations[key]) {{
+                    element.textContent = translations[key];
+                }}
+            }});
+        }}
+        // Запускаем сразу после загрузки HTML-дерева
+        document.addEventListener('DOMContentLoaded', applyLocalization);
+    </script>
     """
 
+def create_html(card_info, web_page_theme='system', language_localization='system'):
+    """
+    Создает HTML-страницу с механизмом "пульса", темами и локализацией.
+    
+    :param card_info: Словарь с информацией о карточке или None.
+    :param web_page_theme: 'system'/'dark'/'light' - тема оформления.
+    :param language_localization: 'system' или код языка (например, 'ru', 'en').
+    """
     # Определяем, какой атрибут темы добавить в тег <html>
     # Для 'system' атрибут не добавляется, чтобы браузер сам решал по настройкам ОС
     theme_attribute = f"data-theme='{web_page_theme}'" if web_page_theme in ['light', 'dark'] else ''
 
-    # --- НОВЫЙ БЛОК: СТИЛИ ДЛЯ ТЕМ ---
+    # --- СТИЛИ ДЛЯ ТЕМ ---
     # Определяем стили с использованием CSS-переменных для легкой смены темы
     theme_styles = """
         /* 1. Сообщаем браузеру, что страница поддерживает темы, и задаем переменные для светлой темы по умолчанию */
@@ -71,7 +114,7 @@ def create_html(card_info, web_page_theme = 'system'):
             --button-hover-bg: #dcdcdc;
         }
 
-        /* 2. Определяем переменные для темной темы */
+        /* 2. Определяем переменные для темной темы на основе настроек ОС */
         @media (prefers-color-scheme: dark) {
             :root {
                 --bg-color: #121212;
@@ -110,7 +153,8 @@ def create_html(card_info, web_page_theme = 'system'):
             color: var(--text-color);
         }
         .card {
-            background-color: var(--card-bg);
+            background-color: var(--card-bg) !important;
+            color: var(--text-color) !important;
             border: 1px solid var(--border-color);
         }
         #answer {
@@ -131,10 +175,14 @@ def create_html(card_info, web_page_theme = 'system'):
         }
     """
     
+    # Определяем, какой язык использовать для отрисовки текста по умолчанию (до того, как JS сработает).
+    # Если 'system', то безопаснее всего использовать fallback-язык (английский).
+    render_lang = language_localization if language_localization != 'system' else LOCALIZER.fallback_lang
+
     # --- СТРАНИЦА ОШИБКИ ---
     if not card_info: 
         return f"""
-        <!DOCTYPE html><html lang="ru" {theme_attribute}><head><meta charset="UTF-8">
+        <!DOCTYPE html><html lang="{render_lang}" {theme_attribute}><head><meta charset="UTF-8">
         <title>AnkiGaming - Page - Ошибка</title>
         <style>
             {theme_styles} /* Вставляем стили тем */
@@ -142,12 +190,19 @@ def create_html(card_info, web_page_theme = 'system'):
             button {{ margin-top: 20px; padding: 10px 20px; font-size: 16px; cursor: pointer; }}
         </style>
         </head><body>
-        <h1>Карточка не найдена.</h1>
-        <p>Возможно, в выбранной колоде нет карточек для повторения.</p>
-        <button onclick="shutdown()">Выключить "AnkiGaming - Page"</button>
+        <h1 data-translate-key="cardNotFound">{LOCALIZER.get('cardNotFound', render_lang)}</h1>
+        <p data-translate-key="noCardsInDeck">{LOCALIZER.get('noCardsInDeck', render_lang)}</p>
+        <button onclick="shutdown()" data-translate-key="shutdownAnkiGaming">{LOCALIZER.get('shutdownAnkiGaming', render_lang)}</button>
+        
+        {_get_localization_script(LOCALIZER, language_localization)}
+
         <script>
             function shutdown() {{
-                fetch('/shutdown').then(() => {{ setTimeout(() => window.close(), 100); }});
+                // Отправляем запрос на сервер для выключения
+                fetch('/shutdown').then(() => {{
+                    // И закрываем вкладку браузера после отправки запроса
+                    setTimeout(() => window.close(), 100);
+                }});
             }}
         </script>
         </body></html>
@@ -158,13 +213,15 @@ def create_html(card_info, web_page_theme = 'system'):
     css = card_info['css']
     
     buttons_html = ""
-    button_map = {1: "Снова", 2: "Трудно", 3: "Хорошо", 4: "Легко"}
+    button_map = {1: "again", 2: "hard", 3: "good", 4: "easy"}
     for ease_value in card_info.get('buttons', []):
-        buttons_html += f'<button onclick="answerCardAndClose({ease_value})">{button_map[ease_value]}</button>'
+        key = button_map[ease_value]
+        text = LOCALIZER.get(key, render_lang)
+        buttons_html += f'<button onclick="answerCardAndClose({ease_value})" data-translate-key="{key}">{text}</button>'
 
     # --- ОСНОВНАЯ СТРАНИЦА ---
     html_template = f"""
-    <!DOCTYPE html><html lang="ru" {theme_attribute}><head><meta charset="UTF-8">
+    <!DOCTYPE html><html lang="{render_lang}" {theme_attribute}><head><meta charset="UTF-8">
     <title>AnkiGaming - Page</title>
     <style>
         /* Стили из карточки anki */
@@ -186,9 +243,13 @@ def create_html(card_info, web_page_theme = 'system'):
         <div id="question">{question_html}</div>
         <div id="answer">{answer_html}</div>
     </div>
-    <button id="show-answer-btn" onclick="showAnswer()">Показать ответ</button>
+    <button id="show-answer-btn" onclick="showAnswer()" data-translate-key="showAnswer">{LOCALIZER.get('showAnswer', render_lang)}</button>
     <div id="answer-buttons">{buttons_html}</div>
+
+    {_get_localization_script(LOCALIZER, language_localization)}
+
     <script>
+        // Каждые 50 миллисекунд отправляем сигнал, что мы живы
         const heartbeatInterval = setInterval(() => {{
             fetch('/heartbeat').catch(err => console.error('Heartbeat failed:', err));
         }}, 50);
@@ -201,13 +262,19 @@ def create_html(card_info, web_page_theme = 'system'):
         }}
         
         function answerCardAndClose(ease) {{
+            // 1. Немедленно останавливаем отправку "пульса"
             clearInterval(heartbeatInterval);
+            
+            // Блокируем кнопки, чтобы избежать двойных нажатий
             document.querySelectorAll('button').forEach(b => b.disabled = true);
+            
+            // 2. Отправляем ответ на сервер
             fetch('/answer', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ ease: ease }})
             }}).then(response => {{
+                // 3. Закрываем окно после получения ответа от сервера
                 setTimeout(() => window.close(), 100);
             }});
         }}
@@ -257,7 +324,7 @@ def position_and_resize_window(window_title, target_monitor):
                 win = windows[0]
                 #print("Окно найдено.")
                 break
-            time.sleep(0.1)
+            time.sleep(0.01)
         # Ищем окно по его точному заголовку. getWindowsWithTitle возвращает список.
         
         if win:
@@ -273,7 +340,7 @@ def position_and_resize_window(window_title, target_monitor):
                 win.restore()
                 win.moveTo(0, 0)
                 win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
-                time.sleep(0.25)
+                #time.sleep(0.25)
                 win.minimize()
                 win.restore()
                 win.moveTo(target_monitor.x, target_monitor.y)
@@ -310,7 +377,7 @@ def shutdown_server():
 # Создаем обработчик запросов, который будет обновлять время "пульса"
 class HeartbeatHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
-        global last_heartbeat_time, page_theme
+        global last_heartbeat_time, page_theme,language
         
         # Декодируем путь, чтобы обработать имена файлов с пробелами или кириллицей
         decoded_path = urllib.parse.unquote(self.path)
@@ -335,7 +402,7 @@ class HeartbeatHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
-            html_content = create_html(card_info,page_theme)
+            html_content = create_html(card_info,page_theme, language)
             self.wfile.write(html_content.encode('utf-8'))
             
         else:
@@ -389,9 +456,10 @@ class HeartbeatHandler(http.server.SimpleHTTPRequestHandler):
         # Отключаем логирование в консоль, чтобы не засорять вывод
         return
 
-def open_card(web_page_theme='system',deck_name=None):
-    global last_heartbeat_time, card_answered, httpd_server, app_running, page_theme
+def open_card(web_page_theme='system',language_localization='system',deck_name=None):
+    global last_heartbeat_time, card_answered, httpd_server, app_running, page_theme,language
     page_theme = web_page_theme
+    language = language_localization
 
     card_answered = False
     error=False

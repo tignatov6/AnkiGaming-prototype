@@ -32,7 +32,7 @@ def on_death():
     print("Экран смерти обнаружен! Выполняю действие...")
     print(f"CONFIG.web_page_theme: {CONFIG.web_page_theme}")
     print(f"CONFIG.deck_name: {CONFIG.deck_name}")
-    if not card_opener.open_card(CONFIG.web_page_theme,CONFIG.deck_name):
+    if not card_opener.open_card(CONFIG.web_page_theme,CONFIG.language_localization,CONFIG.deck_name):
         shutdown_event.set()
 
 

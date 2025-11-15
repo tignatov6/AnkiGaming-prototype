@@ -1,0 +1,8 @@
+showAnswer: "Show Answer"
+again: "Again"
+hard: "Hard"
+good: "Good"
+easy: "Easy"
+cardNotFound: "Card not found."
+noCardsInDeck: "Perhaps there are no cards to review in the selected deck."
+shutdownAnkiGaming: "Shutdown \"AnkiGaming\""
